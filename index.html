@@ -9,7 +9,7 @@
     html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
     body{background:linear-gradient(180deg,var(--bg),#fff);padding:12px}
     .container{max-width:900px;margin:0 auto}
-    header{display:flex;gap:12px;align-items:center;justify-content:space-between}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
     h1{font-size:18px;margin:0}
     .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(20,20,40,0.06);margin-top:12px}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;align-items:end}
@@ -45,6 +45,12 @@
     <header>
       <h1>Weight Tracker (Single File)</h1>
       <div class="small">Stored Locally · Mobile Friendly</div>
+      <div class="row" id="authBox" style="flex-wrap:wrap;gap:8px;flex:1 1 100%;justify-content:flex-end">
+        <input id="authEmail" type="email" placeholder="Enter email to sync" style="min-width:220px" />
+        <button id="sendLinkBtn" type="button">Send Sign-In Link</button>
+        <button id="signOutBtn" type="button" style="display:none;background:#64748b">Sign Out</button>
+        <span id="authStatus" class="small muted">Not signed in (local only)</span>
+      </div>
     </header>
 
     <section class="card" id="settings">
@@ -138,6 +144,7 @@
   <script>
     // keys
     const LS_KEYS = {settings:'wt_settings_v1',entries:'wt_entries_v1'};
+    window.LS_KEYS = LS_KEYS
 
     // DOM
     const heightEl = document.getElementById('height')
@@ -174,6 +181,26 @@
     const memoryStore = {}
     let storageAvailable = true
     let storageWarningShown = false
+
+    function markUpdated(){
+      const timestamp = String(Date.now())
+      if(storageAvailable){
+        try { localStorage.setItem('wt_updated_at', timestamp) }
+        catch(err){ memoryStore.wt_updated_at = timestamp }
+      } else {
+        memoryStore.wt_updated_at = timestamp
+      }
+      if(typeof window.saveCloud === 'function'){
+        try {
+          const maybePromise = window.saveCloud()
+          if(maybePromise && typeof maybePromise.catch === 'function'){
+            maybePromise.catch(err=>console.error('saveCloud failed', err))
+          }
+        } catch(err){
+          console.error('saveCloud error', err)
+        }
+      }
+    }
 
     function showStorageWarning(){
       if(storageWarningShown) return
@@ -254,6 +281,7 @@
       settings.targetWeight = parseFloat(targetWeightEl.value) || null
       storageSet(LS_KEYS.settings, JSON.stringify(settings))
       targetTxt.textContent = settings.targetWeight || '—'
+      markUpdated()
       renderAll()
       alert('Settings saved')
     }
@@ -264,6 +292,7 @@
       storageRemove(LS_KEYS.entries)
       settings = {height:null,currentWeight:null,targetWeight:null}
       entries = {}
+      markUpdated()
       load()
     }
 
@@ -275,6 +304,7 @@
       storageSet(LS_KEYS.entries, JSON.stringify(entries))
       // if user didn't set currentWeight update it
       if(!settings.currentWeight) { settings.currentWeight = entries[d]; storageSet(LS_KEYS.settings, JSON.stringify(settings)); currentWeightEl.value = settings.currentWeight }
+      markUpdated()
       renderAll()
       alert('Entry saved')
     }
@@ -283,6 +313,7 @@
       if(!confirm('Delete the entry for '+date+'?')) return
       delete entries[date]
       storageSet(LS_KEYS.entries, JSON.stringify(entries))
+      markUpdated()
       renderAll()
     }
 
@@ -418,6 +449,7 @@
           }
           storageSet(LS_KEYS.settings, JSON.stringify(settings))
           storageSet(LS_KEYS.entries, JSON.stringify(entries))
+          markUpdated()
           load()
           alert('Import complete')
         }catch(err){ alert('Import failed: '+err.message) }
@@ -438,6 +470,151 @@
 
     // init
     load()
+  </script>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"
+    import { getAuth, isSignInWithEmailLink, signInWithEmailLink, sendSignInLinkToEmail, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js"
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js"
+
+    const authEmail = document.getElementById('authEmail')
+    const sendLinkBtn = document.getElementById('sendLinkBtn')
+    const signOutBtn = document.getElementById('signOutBtn')
+    const authStatus = document.getElementById('authStatus')
+
+    const firebaseConfig = {
+      apiKey: 'AIzaSyBprGw34LeNx7fUcea5zYmjsgj_d52MKGo',
+      authDomain: 'weightlogger-346a7.firebaseapp.com',
+      projectId: 'weightlogger-346a7',
+      storageBucket: 'weightlogger-346a7.appspot.com',
+      messagingSenderId: '1065070169544',
+      appId: '1:1065070169544:web:97d7a4545fcf0fd9fd44fd'
+    }
+
+    const placeholders = new Set(['YOUR_API_KEY','YOUR_PROJECT_ID','YOUR_PROJECT_ID.firebaseapp.com','YOUR_PROJECT_ID.appspot.com','YOUR_SENDER_ID','YOUR_APP_ID'])
+    const configValues = Object.values(firebaseConfig)
+    const configReady = configValues.every(v => v && !placeholders.has(v))
+
+    if(!configReady){
+      if(authStatus) authStatus.textContent = 'Cloud sync not configured (local storage only)'
+      if(sendLinkBtn){ sendLinkBtn.disabled = true; sendLinkBtn.textContent = 'Sync Not Configured' }
+      return
+    }
+
+    const app = initializeApp(firebaseConfig)
+    const auth = getAuth(app)
+    const db = getFirestore(app)
+
+    const LS_KEYS = window.LS_KEYS || {settings:'wt_settings_v1',entries:'wt_entries_v1'}
+
+    function storeRef(uid){
+      return doc(db, 'users', uid, 'stores', 'main')
+    }
+
+    ;(async function handleEmailLink(){
+      if(isSignInWithEmailLink(auth, window.location.href)){
+        let email = window.localStorage.getItem('emailForSignIn')
+        if(!email) email = window.prompt('Enter the email you used for sign-in')
+        if(!email) return
+        try {
+          await signInWithEmailLink(auth, email, window.location.href)
+          window.localStorage.removeItem('emailForSignIn')
+          window.history.replaceState({}, document.title, window.location.pathname)
+        } catch(err){
+          console.error(err)
+          alert('Sign-in failed: '+err.message)
+        }
+      }
+    })()
+
+    let unsubscribe = null
+    onAuthStateChanged(auth, async user => {
+      if(unsubscribe){ unsubscribe(); unsubscribe = null }
+
+      if(!user){
+        if(authStatus) authStatus.textContent = 'Not signed in (local only)'
+        if(signOutBtn) signOutBtn.style.display = 'none'
+        return
+      }
+
+      if(authStatus) authStatus.textContent = `Signed in: ${user.email || 'Authenticated'}`
+      if(signOutBtn) signOutBtn.style.display = 'inline-block'
+
+      const ref = storeRef(user.uid)
+      const snap = await getDoc(ref)
+      if(!snap.exists()){
+        const payload = readLocal()
+        await setDoc(ref, {...payload, updatedAt: serverTimestamp()})
+      }
+
+      unsubscribe = onSnapshot(ref, docSnap => {
+        if(!docSnap.exists()) return
+        const cloud = docSnap.data()
+        const local = readLocal()
+        const cloudTime = docSnap.updateTime ? docSnap.updateTime.toMillis() : 0
+        const localTime = Number(local.updatedAt || 0)
+        if(cloudTime > localTime){
+          writeLocal({settings: cloud.settings || {}, entries: cloud.entries || {}, updatedAt: cloudTime})
+          if(typeof renderAll === 'function') renderAll()
+        }
+      })
+    })
+
+    sendLinkBtn?.addEventListener('click', async () => {
+      const email = (authEmail?.value || '').trim()
+      if(!email) return alert('Please enter an email address first')
+      try {
+        await sendSignInLinkToEmail(auth, email, {
+          url: window.location.href,
+          handleCodeInApp: true
+        })
+        window.localStorage.setItem('emailForSignIn', email)
+        alert('Sign-in link sent. Open it on any device to finish signing in.')
+      } catch(err){
+        console.error(err)
+        alert('Failed to send link: '+err.message)
+      }
+    })
+
+    signOutBtn?.addEventListener('click', async () => {
+      await signOut(auth)
+      alert('Signed out')
+    })
+
+    window.addEventListener('storage', e => {
+      if(e.key === LS_KEYS.settings || e.key === LS_KEYS.entries){
+        saveCloud().catch(console.error)
+      }
+    })
+
+    window.saveCloud = saveCloud
+
+    async function saveCloud(){
+      const user = auth.currentUser
+      if(!user) return
+      const ref = storeRef(user.uid)
+      const payload = readLocal()
+      await setDoc(ref, {settings: payload.settings, entries: payload.entries, updatedAt: serverTimestamp()}, {merge:true})
+    }
+
+    function readLocal(){
+      const empty = {settings:{}, entries:{}, updatedAt:0}
+      try {
+        const settings = JSON.parse(window.localStorage.getItem(LS_KEYS.settings) || '{}')
+        const entries = JSON.parse(window.localStorage.getItem(LS_KEYS.entries) || '{}')
+        const updatedAt = Number(window.localStorage.getItem('wt_updated_at') || 0)
+        return {settings, entries, updatedAt}
+      } catch(err){
+        console.error('Failed to read local data', err)
+        return empty
+      }
+    }
+
+    function writeLocal({settings, entries, updatedAt}){
+      if(settings) window.localStorage.setItem(LS_KEYS.settings, JSON.stringify(settings))
+      if(entries) window.localStorage.setItem(LS_KEYS.entries, JSON.stringify(entries))
+      if(updatedAt) window.localStorage.setItem('wt_updated_at', String(updatedAt))
+    }
   </script>
 </body>
 </html>
