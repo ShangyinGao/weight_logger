@@ -560,19 +560,32 @@
       })
     })
 
+    const actionUrl = buildActionUrl()
+    const actionCodeSettings = { url: actionUrl, handleCodeInApp: true }
+
     sendLinkBtn?.addEventListener('click', async () => {
       const email = (authEmail?.value || '').trim()
       if(!email) return alert('Please enter an email address first')
+      const originalText = sendLinkBtn.textContent
+      sendLinkBtn.disabled = true
+      sendLinkBtn.textContent = 'Sending…'
       try {
-        await sendSignInLinkToEmail(auth, email, {
-          url: window.location.href,
-          handleCodeInApp: true
-        })
+        await sendSignInLinkToEmail(auth, email, actionCodeSettings)
         window.localStorage.setItem('emailForSignIn', email)
         alert('Sign-in link sent. Open it on any device to finish signing in.')
       } catch(err){
         console.error(err)
-        alert('Failed to send link: '+err.message)
+        const code = err && err.code ? String(err.code) : ''
+        if(code === 'auth/unauthorized-domain'){
+          alert('Failed to send link: add this site\'s domain to Firebase Authentication → Settings → Authorized domains.')
+        } else if(code === 'auth/invalid-continue-uri'){
+          alert('Failed to send link: invalid redirect URL. Update sync script with the hosted URL of this page.')
+        } else {
+          alert('Failed to send link: '+err.message)
+        }
+      } finally {
+        sendLinkBtn.disabled = false
+        sendLinkBtn.textContent = originalText || 'Send Sign-In Link'
       }
     })
 
@@ -614,6 +627,17 @@
       if(settings) window.localStorage.setItem(LS_KEYS.settings, JSON.stringify(settings))
       if(entries) window.localStorage.setItem(LS_KEYS.entries, JSON.stringify(entries))
       if(updatedAt) window.localStorage.setItem('wt_updated_at', String(updatedAt))
+    }
+
+    function buildActionUrl(){
+      try {
+        const url = new URL(window.location.href)
+        url.hash = ''
+        return url.toString()
+      } catch(err){
+        console.error('Failed to build action URL', err)
+        return window.location.href
+      }
     }
   </script>
 </body>
