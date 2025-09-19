@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Single-File Weight Tracker</title>
+  <style>
+    :root{--bg:#f7f8fb;--card:#fff;--accent:#4f46e5;--muted:#6b7280}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,var(--bg),#fff);padding:12px}
+    .container{max-width:900px;margin:0 auto}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between}
+    h1{font-size:18px;margin:0}
+    .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(20,20,40,0.06);margin-top:12px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;align-items:end}
+    label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+    input[type="number"],input[type="date"],input[type="text"],select{width:100%;padding:8px;border-radius:8px;border:1px solid #e6e9ef;font-size:15px}
+    button{background:var(--accent);color:#fff;border:0;padding:10px 12px;border-radius:10px;font-weight:600}
+    .muted{color:var(--muted);font-size:13px}
+    .row{display:flex;gap:8px}
+    .chart-wrap{min-height:260px;display:flex;flex-direction:column;gap:12px}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    td,th{padding:8px;border-bottom:1px solid #f1f3f5;text-align:left}
+    .small{font-size:12px;color:var(--muted)}
+    .danger{background:#fee2e2;color:#b91c1c}
+    .storage-warning{background:#fee2e2;color:#b91c1c;padding:10px 12px;border-radius:10px;margin-top:12px;font-size:13px}
+    .settings-layout{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;align-items:end}
+    .settings-actions,.form-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+    .form-actions{align-items:center}
+    .settings-actions button,.form-actions button{flex:0 0 auto}
+    .summary-row{display:flex;justify-content:center;gap:24px;flex-wrap:wrap}
+    .summary-item{flex:1 1 200px;text-align:center}
+    .chart-wrap canvas{width:100%;height:100%}
+    .chart-controls{display:flex;justify-content:flex-end;align-items:center;gap:8px}
+    .chart-controls label{margin:0;font-size:13px;color:var(--muted)}
+    .chart-controls select{max-width:160px}
+    .chart-wrap canvas{flex:1}
+    #settings input[type="number"],#settings select{max-width:180px}
+    .grid input[type="date"],.grid input[type="number"],.grid input[type="text"],.grid select{max-width:180px}
+    @media (max-width:720px){.grid{grid-template-columns:1fr}.settings-layout{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Weight Tracker (Single File)</h1>
+      <div class="small">Stored Locally · Mobile Friendly</div>
+    </header>
+
+    <section class="card" id="settings">
+      <div class="settings-layout">
+        <div>
+          <label>Height (cm)</label>
+          <input id="height" type="number" min="50" max="250" step="0.1" />
+        </div>
+        <div>
+          <label>Current Weight (kg, ideally your latest entry)</label>
+          <input id="currentWeight" type="number" min="20" max="300" step="0.1" />
+        </div>
+        <div>
+          <label>Target Weight (kg)</label>
+          <input id="targetWeight" type="number" min="20" max="300" step="0.1" />
+        </div>
+        <div class="settings-actions">
+          <button id="saveSettings">Save Settings</button>
+          <button id="resetAll" style="background:#ef4444">Clear All</button>
+        </div>
+      </div>
+      <p class="muted">After saving, BMI and progress to your goal are recalculated from the latest weight. All data stays in your browser (localStorage).</p>
+    </section>
+
+    <section class="card">
+      <div class="summary-row">
+        <div class="summary-item">
+          <div class="small">Latest BMI</div>
+          <div id="bmiText" style="font-weight:700;font-size:18px">—</div>
+          <div id="bmiCategory" class="small muted">—</div>
+        </div>
+        <div class="summary-item">
+          <div class="small">Distance to Goal</div>
+          <div id="progressText" style="font-weight:700;font-size:18px">—</div>
+          <div class="small muted">(Goal: <span id="targetTxt">—</span> kg)</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 style="margin:0 0 8px 0">Add / Update Daily Entry</h3>
+      <div class="grid">
+        <div>
+          <label>Date</label>
+          <input id="entryDate" type="date" />
+        </div>
+        <div>
+          <label>Weight (kg)</label>
+          <input id="entryWeight" type="number" step="0.1" min="10" max="300" />
+        </div>
+        <div class="form-actions">
+          <button id="addEntry">Save Entry</button>
+          <button id="fillToday">Use Today's Date</button>
+          <button id="exportJson" style="background:#10b981">Export JSON</button>
+          <button id="exportCsv" style="background:#06b6d4">Export CSV</button>
+          <input id="importFile" type="file" accept="application/json,text/csv" style="display:none"/>
+          <button id="importBtn" style="background:#f59e0b">Import</button>
+        </div>
+      </div>
+      <p class="muted">Saving an existing date again will overwrite that day's entry.</p>
+    </section>
+
+    <section class="card chart-wrap">
+      <div class="chart-controls">
+        <label for="rangeSelect">Chart Range</label>
+        <select id="rangeSelect">
+          <option value="all">All</option>
+          <option value="90">Last 90 Days</option>
+          <option value="30">Last 30 Days</option>
+          <option value="7">Last 7 Days</option>
+        </select>
+      </div>
+      <canvas id="weightChart"></canvas>
+    </section>
+
+    <section class="card">
+      <h3 style="margin:0 0 8px 0">History</h3>
+      <div style="overflow:auto;max-height:320px">
+        <table id="historyTable">
+          <thead><tr><th>Date</th><th>Weight (kg)</th><th class="small">Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer style="text-align:center;margin:18px 0;color:var(--muted);font-size:13px">This is a single-file offline weight tracker; no data is collected—everything stays in your browser.</footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <script>
+    // keys
+    const LS_KEYS = {settings:'wt_settings_v1',entries:'wt_entries_v1'};
+
+    // DOM
+    const heightEl = document.getElementById('height')
+    const currentWeightEl = document.getElementById('currentWeight')
+    const targetWeightEl = document.getElementById('targetWeight')
+    const saveSettingsBtn = document.getElementById('saveSettings')
+    const resetAllBtn = document.getElementById('resetAll')
+
+    const entryDate = document.getElementById('entryDate')
+    const entryWeight = document.getElementById('entryWeight')
+    const addEntryBtn = document.getElementById('addEntry')
+    const fillTodayBtn = document.getElementById('fillToday')
+    const exportJsonBtn = document.getElementById('exportJson')
+    const exportCsvBtn = document.getElementById('exportCsv')
+    const importBtn = document.getElementById('importBtn')
+    const importFile = document.getElementById('importFile')
+
+    const bmiText = document.getElementById('bmiText')
+    const bmiCategory = document.getElementById('bmiCategory')
+    const progressText = document.getElementById('progressText')
+    const targetTxt = document.getElementById('targetTxt')
+    const rangeSelect = document.getElementById('rangeSelect')
+
+    const historyTableBody = document.querySelector('#historyTable tbody')
+
+    // data
+    let settings = {height: null, currentWeight: null, targetWeight: null}
+    let entries = {} // { 'YYYY-MM-DD': weight }
+
+    // chart
+    let chart = null
+
+    // storage helpers
+    const memoryStore = {}
+    let storageAvailable = true
+    let storageWarningShown = false
+
+    function showStorageWarning(){
+      if(storageWarningShown) return
+      storageWarningShown = true
+      const container = document.querySelector('.container')
+      const settingsSection = document.getElementById('settings')
+      if(!container || !settingsSection) return
+      const notice = document.createElement('div')
+      notice.className = 'storage-warning'
+      notice.textContent = 'Browser storage is unavailable. Data will only persist while this page stays open.'
+      container.insertBefore(notice, settingsSection)
+    }
+
+    function storageGet(key){
+      if(storageAvailable){
+        try { return localStorage.getItem(key) }
+        catch(err){
+          console.warn('localStorage.getItem failed, using in-memory store instead', err)
+          storageAvailable = false
+          showStorageWarning()
+        }
+      }
+      return Object.prototype.hasOwnProperty.call(memoryStore,key) ? memoryStore[key] : null
+    }
+
+    function storageSet(key, value){
+      if(storageAvailable){
+        try { localStorage.setItem(key, value); return }
+        catch(err){
+          console.warn('localStorage.setItem failed, using in-memory store instead', err)
+          storageAvailable = false
+          showStorageWarning()
+        }
+      }
+      memoryStore[key] = String(value)
+    }
+
+    function storageRemove(key){
+      if(storageAvailable){
+        try { localStorage.removeItem(key); return }
+        catch(err){
+          console.warn('localStorage.removeItem failed, using in-memory store instead', err)
+          storageAvailable = false
+          showStorageWarning()
+        }
+      }
+      delete memoryStore[key]
+    }
+
+    try {
+      const testKey = '__wt_test__'
+      localStorage.setItem(testKey, 'ok')
+      localStorage.removeItem(testKey)
+    } catch(err){
+      storageAvailable = false
+      console.warn('localStorage unavailable, switching to in-memory store', err)
+      showStorageWarning()
+    }
+
+    // helpers
+    function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10)}
+    function load(){
+      const s = storageGet(LS_KEYS.settings)
+      const e = storageGet(LS_KEYS.entries)
+      if(s) settings = JSON.parse(s)
+      if(e) entries = JSON.parse(e)
+      heightEl.value = settings.height || ''
+      currentWeightEl.value = settings.currentWeight || ''
+      targetWeightEl.value = settings.targetWeight || ''
+      targetTxt.textContent = settings.targetWeight ? settings.targetWeight : '—'
+      entryDate.value = todayStr()
+      renderAll()
+    }
+
+    function saveSettings(){
+      settings.height = parseFloat(heightEl.value) || null
+      settings.currentWeight = parseFloat(currentWeightEl.value) || null
+      settings.targetWeight = parseFloat(targetWeightEl.value) || null
+      storageSet(LS_KEYS.settings, JSON.stringify(settings))
+      targetTxt.textContent = settings.targetWeight || '—'
+      renderAll()
+      alert('Settings saved')
+    }
+
+    function resetAll(){
+      if(!confirm('Clear all settings and entries? This cannot be undone.')) return
+      storageRemove(LS_KEYS.settings)
+      storageRemove(LS_KEYS.entries)
+      settings = {height:null,currentWeight:null,targetWeight:null}
+      entries = {}
+      load()
+    }
+
+    function addEntry(){
+      const d = entryDate.value
+      const w = parseFloat(entryWeight.value)
+      if(!d || Number.isNaN(w)) { alert('Please fill in a date and weight.'); return }
+      entries[d] = Math.round(w*10)/10
+      storageSet(LS_KEYS.entries, JSON.stringify(entries))
+      // if user didn't set currentWeight update it
+      if(!settings.currentWeight) { settings.currentWeight = entries[d]; storageSet(LS_KEYS.settings, JSON.stringify(settings)); currentWeightEl.value = settings.currentWeight }
+      renderAll()
+      alert('Entry saved')
+    }
+
+    function deleteEntry(date){
+      if(!confirm('Delete the entry for '+date+'?')) return
+      delete entries[date]
+      storageSet(LS_KEYS.entries, JSON.stringify(entries))
+      renderAll()
+    }
+
+    function renderAll(){
+      renderMeta()
+      renderTable()
+      renderChart()
+    }
+
+    function renderMeta(){
+      // compute latest weight by latest date
+      const dates = Object.keys(entries).sort()
+      const latestDate = dates.length?dates[dates.length-1]:null
+      const latestWeight = latestDate?entries[latestDate]:(settings.currentWeight||null)
+      if(settings.height && latestWeight){
+        const bmi = computeBMI(latestWeight, settings.height)
+        bmiText.textContent = bmi.toFixed(1)
+        bmiCategory.textContent = bmiCategoryText(bmi)
+      } else {
+        bmiText.textContent = '—'
+        bmiCategory.textContent = 'Please set your height and add a record'
+      }
+      if(settings.targetWeight && latestWeight){
+        const diff = Math.round((latestWeight - settings.targetWeight)*10)/10
+        const dir = diff>0?"Need to lose":"Beyond goal"
+        progressText.textContent = Math.abs(diff)+" kg ("+dir+")"
+      } else {
+        progressText.textContent = '—'
+      }
+    }
+
+    function computeBMI(weight, heightCm){
+      const h = heightCm/100
+      if(!h) return NaN
+      return weight / (h*h)
+    }
+
+    function bmiCategoryText(bmi){
+      if(bmi<18.5) return 'Underweight'
+      if(bmi<24) return 'Normal'
+      if(bmi<28) return 'Overweight'
+      return 'Obese'
+    }
+
+    function renderTable(){
+      const rows = Object.keys(entries).sort((a,b)=>b.localeCompare(a))
+      historyTableBody.innerHTML = ''
+      if(rows.length===0){
+        historyTableBody.innerHTML = '<tr><td colspan="3" class="small muted">No entries yet</td></tr>'
+        return
+      }
+      for(const d of rows){
+        const tr = document.createElement('tr')
+        const tdDate = document.createElement('td')
+        tdDate.textContent = d
+        const tdWeight = document.createElement('td')
+        tdWeight.textContent = entries[d]
+        const tdOps = document.createElement('td')
+        tdOps.innerHTML = `<button onclick="editEntry('${d}')">Edit</button> <button onclick="deleteEntry('${d}')" style="background:#ef4444">Delete</button>`
+        tr.appendChild(tdDate);tr.appendChild(tdWeight);tr.appendChild(tdOps)
+        historyTableBody.appendChild(tr)
+      }
+    }
+
+    // expose delete/edit to global for onclick in generated HTML
+    window.deleteEntry = deleteEntry
+    window.editEntry = function(d){ entryDate.value = d; entryWeight.value = entries[d]; scrollTo(0,0) }
+
+    function prepareChartData(rangeDays){
+      const pairs = Object.keys(entries).sort().map(d=>[d, entries[d]])
+      if(rangeDays && rangeDays!=='all'){
+        const days = parseInt(rangeDays)
+        const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days+1)
+        return pairs.filter(([d])=>new Date(d) >= cutoff)
+      }
+      return pairs
+    }
+
+    function renderChart(){
+      if(typeof window.Chart === 'undefined'){
+        console.warn('Chart.js unavailable; skip chart render')
+        return
+      }
+      const rangeVal = rangeSelect.value
+      const dataPairs = prepareChartData(rangeVal)
+      const data = dataPairs.map(([date, weight])=>({x:date, y:weight}))
+      if(!chart){
+        const ctx = document.getElementById('weightChart').getContext('2d')
+        chart = new Chart(ctx,{
+          type:'line',
+          data:{datasets:[{label:'Weight (kg)',data,fill:false,tension:0.2,pointRadius:4}]},
+          options:{plugins:{legend:{display:false}},scales:{x:{type:'time',time:{unit:'day',tooltipFormat:'MMM d, yyyy'},title:{display:true,text:'Date'}},y:{title:{display:true,text:'Weight (kg)'}}}}
+        })
+      } else {
+        chart.data.datasets[0].data = data
+        chart.update()
+      }
+    }
+
+    // export/import
+    function download(filename, content, mime){
+      const blob = new Blob([content],{type:mime||'text/plain'})
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+    }
+
+    function exportJson(){
+      const payload = {settings,entries}
+      download('weight-tracker-export.json', JSON.stringify(payload, null, 2), 'application/json')
+    }
+
+    function exportCsv(){
+      const rows = Object.keys(entries).sort().map(d=> `${d},${entries[d]}`)
+      const csv = 'date,weight\n' + rows.join('\n')
+      download('weight-tracker-export.csv', csv, 'text/csv')
+    }
+
+    function importFileHandler(file){
+      const reader = new FileReader()
+      reader.onload = e => {
+        try{
+          const text = e.target.result
+          if(file.name.endsWith('.json')){
+            const obj = JSON.parse(text)
+            if(obj.settings) settings = obj.settings
+            if(obj.entries) entries = obj.entries
+          } else {
+            // try csv
+            const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean)
+            const map = {}
+            for(let i=1;i<lines.length;i++){ const [d,w]=lines[i].split(','); if(d && w) map[d]=parseFloat(w)}
+            entries = {...entries,...map}
+          }
+          storageSet(LS_KEYS.settings, JSON.stringify(settings))
+          storageSet(LS_KEYS.entries, JSON.stringify(entries))
+          load()
+          alert('Import complete')
+        }catch(err){ alert('Import failed: '+err.message) }
+      }
+      reader.readAsText(file)
+    }
+
+    // events
+    saveSettingsBtn.addEventListener('click', saveSettings)
+    resetAllBtn.addEventListener('click', resetAll)
+    addEntryBtn.addEventListener('click', addEntry)
+    fillTodayBtn.addEventListener('click', ()=>entryDate.value = todayStr())
+    exportJsonBtn.addEventListener('click', exportJson)
+    exportCsvBtn.addEventListener('click', exportCsv)
+    importBtn.addEventListener('click', ()=>importFile.click())
+    importFile.addEventListener('change', e=>{ if(e.target.files.length) importFileHandler(e.target.files[0]); e.target.value = '' })
+    rangeSelect.addEventListener('change', renderChart)
+
+    // init
+    load()
+  </script>
+</body>
+</html>
