@@ -138,6 +138,7 @@
   <script>
     // keys
     const LS_KEYS = {settings:'wt_settings_v1',entries:'wt_entries_v1'};
+    window.LS_KEYS = LS_KEYS
 
     // DOM
     const heightEl = document.getElementById('height')
@@ -169,6 +170,17 @@
 
     // chart
     let chart = null
+
+    function markUpdated(){
+      try { localStorage.setItem('wt_updated_at', String(Date.now())) }
+      catch(err){ console.warn('Failed to set wt_updated_at', err) }
+      if(typeof window.saveCloud === 'function'){
+        try {
+          const maybePromise = window.saveCloud()
+          if(maybePromise && typeof maybePromise.catch === 'function') maybePromise.catch(err=>console.error('saveCloud failed', err))
+        } catch(err){ console.error('saveCloud threw', err) }
+      }
+    }
 
     // storage helpers
     const memoryStore = {}
@@ -254,6 +266,7 @@
       settings.targetWeight = parseFloat(targetWeightEl.value) || null
       storageSet(LS_KEYS.settings, JSON.stringify(settings))
       targetTxt.textContent = settings.targetWeight || '—'
+      markUpdated()
       renderAll()
       alert('Settings saved')
     }
@@ -264,6 +277,7 @@
       storageRemove(LS_KEYS.entries)
       settings = {height:null,currentWeight:null,targetWeight:null}
       entries = {}
+      markUpdated()
       load()
     }
 
@@ -275,6 +289,7 @@
       storageSet(LS_KEYS.entries, JSON.stringify(entries))
       // if user didn't set currentWeight update it
       if(!settings.currentWeight) { settings.currentWeight = entries[d]; storageSet(LS_KEYS.settings, JSON.stringify(settings)); currentWeightEl.value = settings.currentWeight }
+      markUpdated()
       renderAll()
       alert('Entry saved')
     }
@@ -283,6 +298,7 @@
       if(!confirm('Delete the entry for '+date+'?')) return
       delete entries[date]
       storageSet(LS_KEYS.entries, JSON.stringify(entries))
+      markUpdated()
       renderAll()
     }
 
@@ -418,6 +434,7 @@
           }
           storageSet(LS_KEYS.settings, JSON.stringify(settings))
           storageSet(LS_KEYS.entries, JSON.stringify(entries))
+          markUpdated()
           load()
           alert('Import complete')
         }catch(err){ alert('Import failed: '+err.message) }
@@ -438,6 +455,77 @@
 
     // init
     load()
+  </script>
+
+  <script>
+    (function(){
+      const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby9f_iAi3Tr3fxEX_jcynCzBkWogqq7aV2fx8FS_7XGCv1kJ2lNd2s-8ESG6nUpSi13jg/exec'
+      if(!SCRIPT_URL || SCRIPT_URL.includes('REPLACE_WITH')){
+        console.info('Sheets sync inactive: configure SCRIPT_URL to enable cross-device sync.')
+        return
+      }
+
+      let userKey = localStorage.getItem('wt_user_key')
+      if(!userKey){
+        const input = window.prompt('Set a sync key to enable cross-device sync (reuse the same on all devices).')
+        if(input && input.trim()){
+          userKey = input.trim()
+          localStorage.setItem('wt_user_key', userKey)
+        }
+      }
+
+      if(!userKey){
+        console.info('Sheets sync inactive: no sync key provided.')
+        return
+      }
+
+      const LS_KEYS = window.LS_KEYS || {settings:'wt_settings_v1',entries:'wt_entries_v1'}
+
+      async function cloudLoad(){
+        try {
+          const res = await fetch(`${SCRIPT_URL}?key=${encodeURIComponent(userKey)}`, {cache:'no-store'})
+          if(!res.ok) throw new Error(`HTTP ${res.status}`)
+          const payload = await res.json()
+          if(!payload || payload.ok !== true || !payload.data) return
+          const data = payload.data
+          const remoteUpdated = Number(data.updatedAt || 0)
+          const localUpdated = Number(localStorage.getItem('wt_updated_at') || 0)
+          if(remoteUpdated > localUpdated){
+            if(data.settings) localStorage.setItem(LS_KEYS.settings, JSON.stringify(data.settings))
+            if(data.entries) localStorage.setItem(LS_KEYS.entries, JSON.stringify(data.entries))
+            localStorage.setItem('wt_updated_at', String(remoteUpdated))
+            if(typeof load === 'function') load()
+            else if(typeof renderAll === 'function') renderAll()
+          }
+        } catch(err){
+          console.error('cloudLoad failed', err)
+        }
+      }
+
+      async function cloudSave(){
+        try {
+          const settings = JSON.parse(localStorage.getItem(LS_KEYS.settings) || '{}')
+          const entries = JSON.parse(localStorage.getItem(LS_KEYS.entries) || '{}')
+          const updatedAt = Number(localStorage.getItem('wt_updated_at') || Date.now())
+          await fetch(`${SCRIPT_URL}?key=${encodeURIComponent(userKey)}`,{
+            method:'POST',
+            headers:{'Content-Type':'text/plain;charset=UTF-8'},
+            body: JSON.stringify({settings, entries, updatedAt})
+          })
+        } catch(err){
+          console.error('cloudSave failed', err)
+        }
+      }
+
+      window.saveCloud = cloudSave
+      window.cloudLoad = cloudLoad
+
+      cloudLoad()
+
+      window.addEventListener('storage', e => {
+        if(e.key === LS_KEYS.settings || e.key === LS_KEYS.entries) cloudSave()
+      })
+    })()
   </script>
 </body>
 </html>
